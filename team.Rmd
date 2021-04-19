@@ -1,6 +1,6 @@
 ---
 title: "LAB5"
-author: "Oztok"
+author: "Murat Oztok"
 date: "4/16/2021"
 output: html_document
 ---
@@ -18,14 +18,27 @@ library(readr)
 library(tidyverse)
 library(lubridate)
 library(readxl)
+library(ggrepel)
+states <- map_data("state")
 acc <- read.csv("https://raw.githubusercontent.com/xdaiISU/ds202materials/master/hwlabs/fars2017/accident.csv", stringsAsFactors = FALSE)
 per <- read.csv("https://raw.githubusercontent.com/xdaiISU/ds202materials/master/hwlabs/fars2017/person.csv" , stringsAsFactors = FALSE)
+names_of_the_states <- states %>% group_by(region) %>% summarize(long=mean(long), lat=mean(lat))
+glc <- readxl::read_xlsx("~/Desktop/DS202/WEEK12/LAB5/FRPP_GLC_-_United_StATESaPRIL122021_(2).xlsx")
 ```
 <br>
 <br>
 
+#Cleaning and Preprocessing
+```{r}
+str(glc)
+glc$STATE = as.numeric(glc$`State Code`)
+glc_states <- glc %>% group_by(STATE) %>% summarize(state_name=first(`State Name`))
+acc_with_state_names <- acc %>% left_join(glc_states, by=c('STATE'))
 
-#1 Are there some days of the week where more accidents happen than the others (see FARS manual, use variable DAY_WEEK)?
+```
+
+
+#1 Are there some days of the week where more accidents happen than the others ?
 ```{r}
 table(acc$DAY_WEEK)
 # As we can see no 7 has the highest value which corresponds to Saturday, then Sunday and Friday follows. We can generalize and say more accidents happen in weekends than weekdays.
@@ -33,7 +46,7 @@ table(acc$DAY_WEEK)
 <br>
 <br>
 
-#2 Create a data frame containing the persons who are fatally hurt in the accidents (look up variable INJ_SEV)
+#2 Create a data frame containing the persons who are fatally hurt in the accidents.
 ```{r}
 fatally_hurt <- per %>% filter(INJ_SEV == 4)
 ```
@@ -41,30 +54,40 @@ fatally_hurt <- per %>% filter(INJ_SEV == 4)
 <br>
 
 
-#3 create a data frame containing the most dangerous vehicle make in each state. The number of persons fatally hit in the vehicle make is used to assess the (non-)safety of a make. Make sure to handle the missing values appropriately. (look up variable MAKE)
+#3 create a data frame containing the most dangerous vehicle make in each state.
 ```{r}
-newdata <- na.omit(per)
-map(newdata, ~sum(is.na(.)))
-most_dangerous <- newdata %>% filter(INJ_SEV == 4) %>% group_by(STATE) %>% count(MAKE)
-most_dangerous <- most_dangerous  %>%
-  group_by(STATE) %>%
-  slice(which.max(n))
+new_dat <- acc_with_state_names %>% inner_join(per, by=c('ST_CASE', 'STATE')) %>% select(STATE, state_name, MAKE)
+most_dangerous <- new_dat %>%
+  filter(!is.na(MAKE)) %>%
+  group_by(STATE, state_name, MAKE) %>%
+  summarize(number_accidents=n()) %>%
+  filter(number_accidents==max(number_accidents))
 most_dangerous
 ```
 <br>
 <br>
 
 
-#4 Create a map, and label each state with the most dangerous vehicle. Discuss the definition of the most dangerous vehicle, and what you find from the map. (Hint: Read the description for the STATE and COUNTY columns in the FARS manual. The state & county codes are Geographic Locator Codes (GLCs) from the General Services Administration’s (GSA) publication. Use readxl::read_xlsx to read in the GLCs.)
+#4 Create a map, and label each state with the most dangerous vehicle. Discuss the definition of the most dangerous vehicle, and what you find from the map.
 ```{r}
+#Lets make sure our region names are uppercase in our state df.
+states$region = toupper(states$region)
+avg_state_locations <- states %>% group_by(region) %>% summarize(avg_long=mean(long), avg_lat=mean(lat))
+dangerous_makes_with_locations <- most_dangerous %>% mutate(region=state_name) %>% inner_join(avg_state_locations, by=c('region'))
+ggplot(states, aes(x=long, y=lat)) + geom_polygon(aes(group=group)) +
+  geom_text_repel(data=dangerous_makes_with_locations, aes(x=avg_long, y=avg_lat, label=MAKE), color='blue')
+#The definition of most dangerous vehicles can be automobile makers who had involved in the highest number of fatal accidents.
+#In this map, we can the MAKE code for the most dangerous vehicle by each states
+#Looking at the map, we see many 12 which corresponds to Ford, 20s  which corresponds to Chevrolet
+
 ```
 <br>
 <br>
 
 
-#5 Join the accident and person table (work out which variable(s) to use)
+#5 Join the accident and person table.
 ```{r}
-merged <- merge(acc, per)
+accidents_people <- acc %>% inner_join(per)
 ```
 <br>
 <br>
@@ -72,9 +95,26 @@ merged <- merge(acc, per)
 
 #6 Tally the number of accidents by day of the week (DAY_WEEK), hour of the day (HOUR) and gender (SEX). Visualize the results and explain what you find.
 ```{r}
-table(merged$DAY_WEEK)
-table(merged$HOUR)
-table(merged$SEX)
+accidents_people %>% group_by(SEX) %>%
+  summarize(number_accidents=n()) %>%
+  ggplot(aes(x=SEX, weight=number_accidents)) + geom_bar() +
+  xlab('Sex Attribute Code') + ylab('No. of Accidents')
+acc %>% group_by(HOUR) %>%
+  filter(HOUR != 99) %>% #Outliers
+  summarize(number_accidents=n()) %>%
+  ggplot(aes(x=HOUR, weight=number_accidents)) + geom_bar() +
+  xlab('Hours in Day') + ylab('No. of Accidents')
+acc %>% group_by(DAY_WEEK) %>%
+  summarize(number_accidents=n()) %>%
+  mutate(weekday=c('Sunday', 'Monday', 'Tuesday', 'Wedneday', 'Thursday', 'Friday', 'Saturday')) %>%
+  select(-DAY_WEEK) %>%
+  subset(select=c(2,1)) %>%
+  ggplot(aes(x=weekday, weight=number_accidents)) + geom_bar() +
+  xlab('Days') + ylab('No. of Accidents')
+#Summaries above show that males are likely to be in an accident that females.
+#The most common hour is 6pm for fatal accidents.
+#Saturday is the most common day where fatal accidents occur.
+
 ```
 <br>
 <br>
@@ -82,6 +122,23 @@ table(merged$SEX)
 
 #7 Now plot a choropleth map of the number of deaths on a county level. Also explain what you find.
 ```{r}
+counties <- map_data('county')
+deaths_by_county <- accidents_people  %>% 
+  filter(INJ_SEV==4) %>% 
+  group_by(STATE, COUNTY) %>%
+  summarize(total_deaths=n())
+glc_counties <- glc %>%
+  mutate(STATE=as.numeric(`State Code`), COUNTY=as.numeric(`County Code`), region=tolower(`State Name`), subregion=tolower(`County Name`)) %>%
+  group_by(region, subregion, STATE, COUNTY) %>%
+  summarize(region=first(region), subregion=first(subregion), STATE=first(STATE), COUNTY=first(COUNTY))
+deaths_by_county_with_names <- deaths_by_county %>% left_join(glc_counties, by=c('STATE', 'COUNTY'))
+dat <- counties %>% left_join(deaths_by_county_with_names, by=c('region', 'subregion'))
+ggplot(dat, aes(x=long, y=lat, fill=total_deaths)) + geom_polygon(aes(group=group))
+
+
+#Here is a map of  total deaths by county. Grayed areas had no records in the dataset implying they had no recorded fatality accidents.
+
+
 ```
 <br>
 <br>
@@ -89,11 +146,17 @@ table(merged$SEX)
 
 #8 Is summer or winter more dangerous? Does this depend on states? Explore and explain.
 ```{r}
-table(merged$MONTH)
-hea <- merged %>% group_by(STATE) %>% count(MONTH)
-hea <- hea %>%
-  group_by(STATE) %>%
-  slice(which.max(n))
-hea
-#Depends on the state
+summer <- acc_with_state_names %>% filter(MONTH %in% c(6,7,8)) #Summer
+winter <- acc_with_state_names %>% filter(MONTH %in% c(12, 1, 2)) #Winter
+nrow(summer)
+nrow(winter)
+summer1 <- summer %>% group_by(state_name) %>% summarize(num_summer_accidents=n())
+winter1 <- winter %>% group_by(state_name) %>% summarize(num_winter_accidents=n())
+dat <- inner_join(summer1, winter1)
+dat %>% filter(num_winter_accidents > num_summer_accidents)
+dat
+
+#More fatal accidents during summer, generalization can be made by saying summers are more dangerous than winters.
+#Looking into the data more, we can see the data suggests that this depend on the state. 
+
 ```
